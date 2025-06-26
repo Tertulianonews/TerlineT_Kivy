@@ -10,6 +10,7 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    timeout-minutes: 120  # 2 horas limite
     
     steps:
       - name: 📥 Checkout código
@@ -26,24 +27,46 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: 📦 Cache dependências
+      - name: 📦 Cache buildozer completo
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/pip
             ~/.buildozer
-          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+            ~/.gradle
+          key: ${{ runner.os }}-buildozer-full-${{ hashFiles('buildozer.spec', 'requirements.txt') }}
           restore-keys: |
+            ${{ runner.os }}-buildozer-full-
             ${{ runner.os }}-buildozer-
 
-      - name: 📱 Instalar dependências Android
+      - name: 🔧 Atualizar sistema e instalar dependências base
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
             build-essential \
             git \
+            unzip \
             python3-dev \
-            ffmpeg \
+            python3-setuptools \
+            python3-wheel \
+            openjdk-17-jdk \
+            autoconf \
+            libtool \
+            pkg-config \
+            zlib1g-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libtinfo5 \
+            cmake \
+            libffi-dev \
+            libssl-dev \
+            automake \
+            gettext \
+            libltdl-dev
+
+      - name: 📱 Instalar dependências SDL2 e multimedia
+        run: |
+          sudo apt-get install -y --no-install-recommends \
             libsdl2-dev \
             libsdl2-image-dev \
             libsdl2-mixer-dev \
@@ -52,71 +75,111 @@ jobs:
             libswscale-dev \
             libavformat-dev \
             libavcodec-dev \
-            zlib1g-dev \
             libgstreamer1.0-dev \
-            libgstreamer-plugins-base1.0-dev
+            libgstreamer-plugins-base1.0-dev \
+            ffmpeg
 
-      - name: 🐍 Instalar dependências Python
+      - name: 🐍 Configurar pip e instalar dependências Python
         run: |
-          python -m pip install --upgrade pip
-          pip install buildozer cython==0.29.36
+          python -m pip install --upgrade pip setuptools wheel
+          pip install --upgrade \
+            buildozer==1.5.0 \
+            cython==0.29.36 \
+            virtualenv \
+            sh \
+            colorama \
+            appdirs \
+            pexpect==4.8.0 \
+            jinja2
 
-      - name: 🔧 Configurar Buildozer
+      - name: 🔧 Configurar Android SDK manualmente
         run: |
-          # Criar diretórios necessários
-          mkdir -p ~/.buildozer/android/platform
+          export ANDROID_HOME="$HOME/.buildozer/android/platform/android-sdk"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
           
-          # Baixar Android SDK command line tools se não estiver em cache
-          if [ ! -d ~/.buildozer/android/platform/android-sdk ]; then
-            mkdir -p ~/.buildozer/android/platform
-            cd ~/.buildozer/android/platform
-            wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-            unzip -q commandlinetools-linux-9477386_latest.zip
-            mkdir -p android-sdk/cmdline-tools
-            mv cmdline-tools android-sdk/cmdline-tools/latest
-            rm commandlinetools-linux-9477386_latest.zip
-          fi
+          # Criar diretórios
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
           
-          # Configurar variáveis de ambiente
-          echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
-          echo "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$HOME/.buildozer/android/platform/android-sdk/platform-tools" >> $GITHUB_PATH
+          # Baixar command line tools
+          cd "$ANDROID_HOME"
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          unzip -q commandlinetools-linux-9477386_latest.zip
+          mv cmdline-tools latest
+          mv latest cmdline-tools/
+          rm commandlinetools-linux-9477386_latest.zip
+          
+          # Configurar PATH
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          
+          # Aceitar licenças
+          yes | sdkmanager --licenses || true
+          
+          # Instalar componentes necessários
+          sdkmanager "platforms;android-33" "build-tools;33.0.2" "ndk;25.2.9519653" "platform-tools"
+          
+          # Definir variáveis para próximos steps
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.2.9519653" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      - name: 🏗️ Build APK Debug
+      - name: 🔍 Verificar configuração
         run: |
-          # Mostrar informações do sistema
-          echo "🔍 Informações do sistema:"
+          echo "🔍 Verificando ambiente:"
           python --version
           java -version
-          
-          echo "📱 Iniciando build do APK..."
-          buildozer android debug
+          echo "ANDROID_HOME: $ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
+          echo "ANDROID_NDK_ROOT: $ANDROID_NDK_ROOT"
+          ls -la ~/.buildozer/android/platform/ || echo "Buildozer ainda não inicializado"
 
-      - name: 📂 Listar arquivos gerados
+      - name: 🏗️ Inicializar buildozer
         run: |
-          echo "📁 Estrutura de arquivos:"
-          find . -name "*.apk" -type f
-          ls -la APK/ || echo "Pasta APK não encontrada"
-          ls -la bin/ || echo "Pasta bin não encontrada"
+          echo "📋 Inicializando buildozer..."
+          buildozer android debug --verbose || echo "Primeira tentativa falhou, continuando..."
+
+      - name: 🔄 Segunda tentativa de build (se necessário)
+        if: always()
+        run: |
+          echo "🔄 Segunda tentativa de build..."
+          buildozer android debug --verbose
+
+      - name: 📂 Localizar APK gerado
+        run: |
+          echo "🔍 Procurando arquivos APK..."
+          find . -name "*.apk" -type f -exec ls -la {} \;
+          
+          # Criar diretório APK e mover arquivos
+          mkdir -p APK
+          find . -name "*.apk" -type f -exec cp {} APK/ \;
+          ls -la APK/ || echo "Nenhum APK encontrado"
 
       - name: 📱 Upload APK como artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: terlinet-debug-apk
           path: |
-            **/*.apk
             APK/*.apk
             bin/*.apk
+            **/*.apk
           retention-days: 30
+          if-no-files-found: warn
 
-      - name: 🎉 Build concluído!
+      - name: 🎉 Status final
+        if: always()
         run: |
-          echo "✅ Build do TerlineT Android concluído com sucesso!"
-          echo "📱 APK disponível nos artifacts desta Action"
+          if [ -f APK/*.apk ]; then
+            echo "✅ Build concluído com sucesso!"
+            echo "📱 APK disponível nos artifacts"
+          else
+            echo "❌ Build falhou - verifique os logs acima"
+            exit 1
+          fi
 
       - name: 💾 Criar Release (se for push para main/master)
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        if: success() && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_number }}
@@ -138,8 +201,7 @@ jobs:
             - ✅ Suporte a modelo GGUF
             - ✅ Reconhecimento de voz (simulado)
             - ✅ Síntese de voz (simulada)
-          files: |
-            **/*.apk
+          files: APK/*.apk
           draft: false
           prerelease: false
         env:
