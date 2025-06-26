@@ -21,6 +21,9 @@ from kivy.graphics import Color, Rectangle
 from kivy.animation import Animation
 from kivy.utils import platform
 
+# Importar o carregador GGUF customizado
+from gguf_loader import GGUFModelWrapper
+
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,15 +39,6 @@ MIC_ACTIVE_COLOR = (1, 0, 0, 1)  # Vermelho
 TEXT_COLOR = (1, 1, 1, 1)  # Branco
 HIGHLIGHT_COLOR = (0, 1, 1, 1)  # Ciano
 
-# Configurações básicas - Tentar importar dependências
-HAS_LLAMA_CPP = False
-try:
-    from llama_cpp import Llama
-    HAS_LLAMA_CPP = True
-    logger.info("llama-cpp-python carregado com sucesso")
-except ImportError:
-    logger.warning("llama-cpp-python não disponível. Usando modo simulado.")
-
 # Configurar caminho do modelo (adaptado para Android)
 if IS_ANDROID:
     try:
@@ -59,17 +53,10 @@ if IS_ANDROID:
 else:
     MODEL_PATH = Path("K:/FLUTTER/TerlineT_Kivy/modelo/DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf")
 
-# Outras configurações
-HAS_GTTS = False
-HAS_PYGAME = False
-HAS_SPEECH_RECOGNITION = False
-HAS_PYAUDIO = False
-
 # Configurar permissões Android
 if IS_ANDROID:
     try:
         from android.permissions import request_permissions, Permission
-
         request_permissions([
             Permission.WRITE_EXTERNAL_STORAGE,
             Permission.READ_EXTERNAL_STORAGE,
@@ -79,126 +66,6 @@ if IS_ANDROID:
     except ImportError:
         logger.warning("Módulo android.permissions não disponível")
         pass
-
-
-class GGUFModel:
-    def __init__(self):
-        self.llm = None
-        self.model_loaded = False
-        self.recovery_phrases = [
-            "Poderia repetir? Não entendi bem.",
-            "Desculpe, não compreendi. Pode reformular?",
-            "Ainda estou aprendendo, poderia explicar de outra forma?"
-        ]
-        self.keyword_responses = {
-            "olá": "Olá! Como posso ajudar?",
-            "bom dia": "Bom dia! Como vai você?",
-            "boa tarde": "Boa tarde! Em que posso ajudar?",
-            "boa noite": "Boa noite! Como posso ajudar?",
-            "qual é o seu nome": "Meu nome é TerlineT! Prazer em conhecê-lo!",
-            "obrigado": "De nada! Estou aqui para ajudar.",
-            "tchau": "Até logo! Volte sempre que precisar."
-        }
-
-        self.system_prompt = (
-            "Você é a TerlineT, uma assistente virtual brasileira simpática e prestativa. "
-            "Responda de forma natural e concisa em português. Seja sempre educada e útil. "
-            "Siga estas regras:\n"
-            "1. Mantenha as respostas curtas (1-3 frases)\n"
-            "2. Use linguagem informal mas correta\n"
-            "3. Não mencione que é uma IA\n"
-            "4. Se não souber responder, peça para reformular\n\n"
-        )
-
-    def load_model(self, callback):
-        """Carrega o modelo GGUF"""
-        if not HAS_LLAMA_CPP:
-            callback(False, "Modo simulado ativo - llama-cpp-python não disponível")
-            return
-
-        if not MODEL_PATH.exists():
-            callback(False, f"Arquivo do modelo não encontrado: {MODEL_PATH}")
-            return
-
-        def load_thread():
-            try:
-                logger.info(f"Carregando modelo GGUF: {MODEL_PATH}")
-
-                # Configurações otimizadas para Android
-                n_threads = 2 if IS_ANDROID else max(2, os.cpu_count() - 1)
-                n_ctx = 1024 if IS_ANDROID else 2048
-                n_batch = 256 if IS_ANDROID else 512
-
-                self.llm = Llama(
-                    model_path=str(MODEL_PATH),
-                    n_ctx=n_ctx,
-                    n_threads=n_threads,
-                    n_batch=n_batch,
-                    seed=42,
-                    verbose=False,
-                    n_gpu_layers=0  # Forçar CPU
-                )
-
-                # Teste de inferência
-                test_output = self.llm("Teste:", max_tokens=5, stop=["\n"])
-                if not test_output or 'choices' not in test_output:
-                    raise RuntimeError("Teste de inferência falhou")
-
-                self.model_loaded = True
-                logger.info("Modelo GGUF carregado com sucesso!")
-                callback(True, None)
-
-            except Exception as e:
-                logger.error(f"Erro ao carregar modelo GGUF: {str(e)}")
-                callback(False, str(e))
-
-        threading.Thread(target=load_thread, daemon=True).start()
-
-    def generate(self, message):
-        # Verifica respostas por palavra-chave primeiro
-        message_lower = message.lower()
-        for keyword, response in self.keyword_responses.items():
-            if keyword in message_lower:
-                return response
-
-        # Usar o modelo GGUF se estiver carregado
-        if self.model_loaded and self.llm is not None:
-            try:
-                # Formata o prompt
-                prompt = f"{self.system_prompt}Usuário: {message}\nTerlineT:"
-
-                # Configurações otimizadas para Android
-                max_tokens = 100 if IS_ANDROID else 150
-
-                response = self.llm(
-                    prompt,
-                    max_tokens=max_tokens,
-                    temperature=0.7,
-                    top_p=0.9,
-                    repeat_penalty=1.1,
-                    stop=["\n", "Usuário:", "TerlineT:"],
-                    echo=False
-                )
-
-                raw_response = response["choices"][0]["text"].strip()
-
-                # Limpa a resposta
-                if raw_response:
-                    # Remove prefixos desnecessários
-                    raw_response = re.sub(r'^(TerlineT:|Assistente:|Bot:)', '',
-                                          raw_response).strip()
-                    # Capitaliza primeira letra
-                    if raw_response and raw_response[0].islower():
-                        raw_response = raw_response[0].upper() + raw_response[1:]
-                    return raw_response
-                else:
-                    return random.choice(self.recovery_phrases)
-
-            except Exception as e:
-                logger.error(f"Erro durante geração com modelo GGUF: {str(e)}")
-                return random.choice(self.recovery_phrases)
-        else:
-            return random.choice(self.recovery_phrases)
 
 
 class VoiceSynthesizer:
@@ -308,19 +175,13 @@ class ChatScreen(ColoredBoxLayout):
 
         # Título
         title = Label(
-            text='TERLINE',
-            font_size=20 if IS_ANDROID else 25,
+            text='🤖 TERLINET - ASSISTENTE VIRTUAL',
+            font_size=16 if IS_ANDROID else 20,
             bold=True,
             color=HIGHLIGHT_COLOR,
             size_hint_y=None,
             height=35 if IS_ANDROID else 40
         )
-
-        # Divisor
-        divider = Widget(size_hint_y=None, height=2)
-        with divider.canvas:
-            Color(*HIGHLIGHT_COLOR)
-            Rectangle(pos=divider.pos, size=(self.width, 2))
 
         # Status
         status = Label(
@@ -394,25 +255,22 @@ class ChatScreen(ColoredBoxLayout):
 
         # Monta a interface
         self.add_widget(title)
-        self.add_widget(divider)
         self.add_widget(status)
         self.add_widget(scroll_view)
         self.add_widget(input_box)
 
-        # Carrega o modelo
-        self.model = GGUFModel()
-        self.model.load_model(self.model_loaded_callback)
+        # Inicializa componentes
+        self.model = GGUFModelWrapper()
         self.voice = VoiceSynthesizer()
         self.voice_recognizer = VoiceRecognizer()
 
         # Mensagem inicial
-        initial_msg = "Modo Android ativo!" if IS_ANDROID else "Modo Desktop ativo!"
-        self.add_message("TerlineT", f"Carregando... {initial_msg}")
-        self.status_text = "Carregando..."
+        platform_msg = "🤖 Android" if IS_ANDROID else "💻 Desktop"
+        self.add_message("Sistema", f"TerlineT iniciando... Plataforma: {platform_msg}")
+        self.status_text = "Carregando modelo GGUF..."
 
-        # Animação de nível do microfone
-        self.anim = Animation(mic_level=1, duration=0.5) + Animation(mic_level=0, duration=0.5)
-        self.anim.repeat = True
+        # Carrega o modelo
+        self.model.load_model(str(MODEL_PATH), self.model_loaded_callback)
 
     def on_start(self):
         """Inicia o reconhecimento de voz automaticamente"""
@@ -423,20 +281,28 @@ class ChatScreen(ColoredBoxLayout):
         self.send_btn.background_color = BUTTON_BG if value else (0.5, 0.5, 0.5, 1)
 
     def model_loaded_callback(self, success, error=None):
+        """Callback chamado quando o modelo é carregado"""
         if success:
-            self.status_text = "Pronto - Diga 'TerlineT' para ativar"
-            self.send_enabled = True
-            welcome_msg = "Olá! Estou pronta para ajudar. Diga 'TerlineT' seguido do seu comando."
+            if error and "simulado" in error.lower():
+                self.status_text = "Modo simulado inteligente ativo"
+                self.add_message("TerlineT",
+                                 f"Olá! Estou funcionando em modo simulado inteligente. {error}")
+            else:
+                self.status_text = "Modelo GGUF carregado - Pronto!"
+                self.add_message("TerlineT",
+                                 "Olá! Modelo GGUF carregado com sucesso! Como posso ajudar?")
+
             if IS_ANDROID:
-                welcome_msg += " Funcionando no seu Android!"
-            self.add_message("TerlineT", welcome_msg)
-            self.speak(welcome_msg)
+                self.add_message("TerlineT",
+                                 f"📱 Funcionando perfeitamente no Android! Modelo localizado em: {MODEL_PATH}")
+
+            self.send_enabled = True
+            self.speak("Olá! Estou pronta para ajudar você!")
         else:
             self.status_text = f"Erro: {error}" if error else "Erro ao carregar"
-            self.add_message("Sistema", f"Falha ao carregar o modelo. Usando modo simulado. {error or ''}")
-            # Ativar modo simulado
-            self.send_enabled = True
-            self.status_text = "Modo simulado ativo"
+            self.add_message("Sistema",
+                             f"❌ Falha ao carregar modelo: {error or 'Erro desconhecido'}")
+            self.send_enabled = True  # Permite uso mesmo com erro
 
     def add_message(self, sender, message):
         timestamp = datetime.now().strftime("%H:%M")
@@ -452,7 +318,7 @@ class ChatScreen(ColoredBoxLayout):
             self.send_enabled = True
 
         self.send_enabled = False
-        self.voice.speak(text, callback)
+        threading.Thread(target=self.voice.speak, args=(text, callback), daemon=True).start()
 
     def send_message(self, instance):
         message = self.input_text.strip()
@@ -464,25 +330,30 @@ class ChatScreen(ColoredBoxLayout):
         self.input_text = ""
         self.input_field.text = ""
         self.send_enabled = False
-        self.status_text = "Pensando..."
+        self.status_text = "Processando..."
 
         # Processa a resposta em outra thread
         threading.Thread(target=self.process_message, args=(message,), daemon=True).start()
 
     def process_message(self, message):
         try:
+            # Gera resposta usando o modelo GGUF
             response = self.model.generate(message)
+
             if response:
                 # Atualiza a UI na thread principal
                 Clock.schedule_once(lambda dt: self.add_message("TerlineT", response))
                 Clock.schedule_once(lambda dt: self.speak(response))
             else:
-                raise RuntimeError("Resposta vazia")
+                raise RuntimeError("Resposta vazia do modelo")
+
         except Exception as e:
-            error_msg = f"Erro: {str(e)}"
+            error_msg = f"Erro ao processar: {str(e)}"
             Clock.schedule_once(lambda dt: self.add_message("Sistema", error_msg))
+            logger.error(f"Erro no processamento: {e}")
         finally:
-            Clock.schedule_once(lambda dt: setattr(self, 'status_text', "Pronto - Diga 'TerlineT' para ativar"))
+            Clock.schedule_once(
+                lambda dt: setattr(self, 'status_text', "Pronto para nova mensagem"))
             Clock.schedule_once(lambda dt: setattr(self, 'send_enabled', True))
 
     def toggle_microphone(self, instance):
@@ -495,7 +366,7 @@ class ChatScreen(ColoredBoxLayout):
     def start_voice_recognition(self):
         """Inicia o reconhecimento de voz"""
         self.mic_active = True
-        self.status_text = "Ouvindo... Diga 'TerlineT'"
+        self.status_text = "🎤 Ouvindo... Diga algo!"
         self.voice_recognizer.start_listening()
 
         # Inicia a verificação de ativação
@@ -504,28 +375,28 @@ class ChatScreen(ColoredBoxLayout):
     def stop_voice_recognition(self):
         """Para o reconhecimento de voz"""
         self.mic_active = False
-        self.status_text = "Pronto - Diga 'TerlineT' para ativar"
+        self.status_text = "Pronto para nova mensagem"
         self.voice_recognizer.stop_listening()
         Clock.unschedule(self.check_voice_activation)
 
     def check_voice_activation(self, dt):
-        """Verifica se a frase de ativação foi detectada"""
+        """Verifica se há comando de voz"""
         if self.voice_recognizer.recording:
             Clock.unschedule(self.check_voice_activation)
-            self.status_text = "Ouvindo seu comando..."
+            self.status_text = "Gravando comando..."
 
-            # Começa a gravar o comando
+            # Simula gravação do comando
             self.voice_recognizer.record_command(self.handle_voice_command)
 
     def handle_voice_command(self, command):
         """Processa o comando de voz reconhecido"""
-        if command:
-            Clock.schedule_once(lambda dt: self.add_message("Você", f"(Voz) {command}"))
+        if command and command.strip():
+            Clock.schedule_once(lambda dt: self.add_message("Você", f"🎤 {command}"))
             Clock.schedule_once(lambda dt: self.process_voice_command(command))
         else:
             self.status_text = "Comando não reconhecido"
-            Clock.schedule_once(lambda dt: self.add_message("Sistema", "Não entendi o comando"))
-            Clock.schedule_once(lambda dt: setattr(self, 'status_text', "Pronto - Diga 'TerlineT' para ativar"))
+            Clock.schedule_once(
+                lambda dt: self.add_message("Sistema", "❌ Não consegui entender o comando de voz"))
 
     def process_voice_command(self, command):
         """Processa o comando de voz como uma mensagem normal"""
@@ -538,6 +409,9 @@ class ChatScreen(ColoredBoxLayout):
 class TerlineTApp(App):
     def build(self):
         Window.clearcolor = WINDOW_BG
+        if IS_ANDROID:
+            # Ajustar tamanho para Android
+            Window.size = (360, 640)
         return ChatScreen()
 
     def on_start(self):

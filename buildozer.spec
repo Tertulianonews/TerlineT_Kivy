@@ -20,7 +20,7 @@ version = 1.0.0
 
 # (list) Application requirements
 # comma separated e.g. requirements = sqlite3,kivy
-requirements = python3,kivy,llama-cpp-python,numpy,typing-extensions,diskcache,jinja2,markupsafe
+requirements = python3,kivy,requests,plyer,numpy,cffi,typing-extensions,diskcache,jinja2,markupsafe
 
 # (str) Presplash of the application
 #presplash.filename = %(source.dir)s/data/presplash.png
@@ -37,6 +37,18 @@ fullscreen = 0
 # (list) Permissions
 android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,RECORD_AUDIO,WAKE_LOCK
 
+# (int) Target Android API, should be as high as possible.
+android.api = 33
+
+# (int) Minimum API your APK / AAB will support.
+android.minapi = 21
+
+# (int) Android SDK version to use
+android.sdk = 33
+
+# (str) Android NDK version to use
+android.ndk = 25b
+
 # (list) The Android archs to build for, choices: armeabi-v7a, arm64-v8a, x86, x86_64
 android.archs = arm64-v8a
 
@@ -44,7 +56,7 @@ android.archs = arm64-v8a
 android.allow_backup = True
 
 # (bool) indicates whether the build should use ANDROIDX compatibility library
-android.enable_androidx = False
+android.enable_androidx = True
 
 # (str) The format used to package the app for debug mode (apk or aab)
 android.debug_artifact = apk
@@ -53,7 +65,23 @@ android.debug_artifact = apk
 android.release_artifact = apk
 
 # (str) Path to build output (i.e. .apk, .aab, .ipa) storage
-bin_dir = ./APK
+bin_dir = ./bin
+
+# (str) python-for-android branch to use, defaults to master
+#p4a.branch = master
+
+# (str) python-for-android git clone directory (if empty, it will be automatically cloned from github)
+#p4a.source_dir =
+
+# (str) The directory in which python-for-android should look for your own build recipes (if any)
+#p4a.local_recipes =
+
+# (str) Filename to the hook for p4a
+#p4a.hook =
+
+# (str) Bootstrap to use for android builds
+# Run "buildozer android p4a -- --help" to see available bootstraps.
+p4a.bootstrap = sdl2
 
 [buildozer]
 
