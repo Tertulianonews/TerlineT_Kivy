@@ -1,0 +1,146 @@
+name: Build TerlineT Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Permite executar manualmente
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+
+      - name: 🐍 Configurar Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: ☕ Configurar Java JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: 📦 Cache dependências
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.buildozer
+          key: ${{ runner.os }}-buildozer-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-buildozer-
+
+      - name: 📱 Instalar dependências Android
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            python3-dev \
+            ffmpeg \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libsdl2-mixer-dev \
+            libsdl2-ttf-dev \
+            libportmidi-dev \
+            libswscale-dev \
+            libavformat-dev \
+            libavcodec-dev \
+            zlib1g-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev
+
+      - name: 🐍 Instalar dependências Python
+        run: |
+          python -m pip install --upgrade pip
+          pip install buildozer cython==0.29.36
+
+      - name: 🔧 Configurar Buildozer
+        run: |
+          # Criar diretórios necessários
+          mkdir -p ~/.buildozer/android/platform
+          
+          # Baixar Android SDK command line tools se não estiver em cache
+          if [ ! -d ~/.buildozer/android/platform/android-sdk ]; then
+            mkdir -p ~/.buildozer/android/platform
+            cd ~/.buildozer/android/platform
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+            unzip -q commandlinetools-linux-9477386_latest.zip
+            mkdir -p android-sdk/cmdline-tools
+            mv cmdline-tools android-sdk/cmdline-tools/latest
+            rm commandlinetools-linux-9477386_latest.zip
+          fi
+          
+          # Configurar variáveis de ambiente
+          echo "ANDROID_HOME=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$HOME/.buildozer/android/platform/android-sdk" >> $GITHUB_ENV
+          echo "$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$HOME/.buildozer/android/platform/android-sdk/platform-tools" >> $GITHUB_PATH
+
+      - name: 🏗️ Build APK Debug
+        run: |
+          # Mostrar informações do sistema
+          echo "🔍 Informações do sistema:"
+          python --version
+          java -version
+          
+          echo "📱 Iniciando build do APK..."
+          buildozer android debug
+
+      - name: 📂 Listar arquivos gerados
+        run: |
+          echo "📁 Estrutura de arquivos:"
+          find . -name "*.apk" -type f
+          ls -la APK/ || echo "Pasta APK não encontrada"
+          ls -la bin/ || echo "Pasta bin não encontrada"
+
+      - name: 📱 Upload APK como artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: terlinet-debug-apk
+          path: |
+            **/*.apk
+            APK/*.apk
+            bin/*.apk
+          retention-days: 30
+
+      - name: 🎉 Build concluído!
+        run: |
+          echo "✅ Build do TerlineT Android concluído com sucesso!"
+          echo "📱 APK disponível nos artifacts desta Action"
+
+      - name: 💾 Criar Release (se for push para main/master)
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ github.run_number }}
+          name: TerlineT Android v${{ github.run_number }}
+          body: |
+            🤖 Build automático do TerlineT Android
+            
+            📱 **APK de Debug incluído**
+            🔧 Build #${{ github.run_number }}
+            📅 ${{ github.event.head_commit.timestamp }}
+            
+            ## 🚀 Como usar:
+            1. Baixe o APK
+            2. Instale no seu Android
+            3. Coloque o modelo GGUF em `/storage/emulated/0/TerlineT/modelo/`
+            
+            ## 📋 Recursos:
+            - ✅ Interface otimizada para Android
+            - ✅ Suporte a modelo GGUF
+            - ✅ Reconhecimento de voz (simulado)
+            - ✅ Síntese de voz (simulada)
+          files: |
+            **/*.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

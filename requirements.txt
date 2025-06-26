@@ -1,0 +1,7 @@
+kivy==2.2.0
+llama-cpp-python==0.2.77
+gtts==2.4.0
+pygame==2.5.2
+SpeechRecognition==3.10.0
+pyaudio==0.2.13
+plyer==2.1.0
